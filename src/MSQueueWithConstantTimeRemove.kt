@@ -2,6 +2,9 @@
 
 import java.util.concurrent.atomic.*
 
+/**
+ * @author Vasilkov Dmitry
+ */
 class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
     private val head: AtomicReference<Node<E>>
     private val tail: AtomicReference<Node<E>>
@@ -13,18 +16,65 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
     }
 
     override fun enqueue(element: E) {
-        // TODO: When adding a new node, check whether
-        // TODO: the previous tail is logically removed.
-        // TODO: If so, remove it physically from the linked list.
-        TODO("Implement me!")
+        while (true) {
+            val curTail = tail.get()
+            val newTail = Node(element, curTail)
+
+            if (curTail.next.compareAndSet(null, newTail)) {
+                updateTail(curTail, newTail)
+                removeIfExtractedOrRemoved(curTail)
+                return
+            } else {
+                moveTailToNext(curTail)
+            }
+        }
+    }
+
+    private fun updateTail(curTail: Node<E>, newTail: Node<E>) {
+        tail.compareAndSet(curTail, newTail)
+    }
+
+    private fun removeIfExtractedOrRemoved(curTail: Node<E>) {
+        if (curTail.extractedOrRemoved) {
+            curTail.remove()
+        }
+    }
+
+    private fun moveTailToNext(curTail: Node<E>) {
+        tail.compareAndSet(curTail, curTail.next.get())
     }
 
     override fun dequeue(): E? {
-        // TODO: After moving the `head` pointer forward,
-        // TODO: mark the node that contains the extracting
-        // TODO: element as "extracted or removed", restarting
-        // TODO: the operation if this node has already been removed.
-        TODO("Implement me!")
+        while (true) {
+            val curHead = head.get()
+            val nextHead = curHead.next.get()
+
+            if (nextHead == null) {
+                return null
+            }
+
+            if (head.compareAndSet(curHead, nextHead)) {
+                removePrevReferenceFromNextHead(nextHead)
+                val element = extractElementFromNextHead(nextHead)
+                if (element != null) {
+                    return element
+                }
+            }
+        }
+    }
+
+    private fun removePrevReferenceFromNextHead(nextHead: Node<E>) {
+        nextHead.prev.set(null)
+    }
+
+    private fun extractElementFromNextHead(nextHead: Node<E>): E? {
+        return if (nextHead.markExtractedOrRemoved()) {
+            nextHead.element.also {
+                nextHead.element = null
+            }
+        } else {
+            null
+        }
     }
 
     override fun remove(element: E): Boolean {
@@ -82,10 +132,6 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         val next = AtomicReference<Node<E>?>(null)
         val prev = AtomicReference(prev)
 
-        /**
-         * TODO: Both [dequeue] and [remove] should mark
-         * TODO: nodes as "extracted or removed".
-         */
         private val _extractedOrRemoved = AtomicBoolean(false)
         val extractedOrRemoved
             get() =
@@ -101,21 +147,29 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
          * removed by [remove] or extracted by [dequeue].
          */
         fun remove(): Boolean {
-            // TODO: As in the previous task, the removal procedure is split into two phases.
-            // TODO: First, you need to mark the node as "extracted or removed".
-            // TODO: On success, this node is logically removed, and the
-            // TODO: operation should return `true` at the end.
-            // TODO: In the second phase, the node should be removed
-            // TODO: physically, updating the `next` field of the previous
-            // TODO: node to `this.next.value`.
-            // TODO: In this task, you have to maintain the `prev` pointer,
-            // TODO: which references the previous node. Thus, the `remove()`
-            // TODO: complexity becomes O(1) under no contention.
-            // TODO: Do not remove physical head and tail of the linked list;
-            // TODO: it is totally fine to have a bounded number of removed nodes
-            // TODO: in the linked list, especially when it significantly simplifies
-            // TODO: the algorithm.
-            TODO("Implement me!")
+            val removed = markExtractedOrRemoved()
+            val curNext = next.get()
+            val curPrev = prev.get()
+
+            if (curPrev == null || curNext == null) {
+                return removed
+            }
+
+            curPrev.next.set(curNext)
+            do {
+                val prevOfNext = curNext.prev.get()
+            } while (prevOfNext != null && !curNext.prev.compareAndSet(prevOfNext, curPrev))
+
+            tryRemove(curPrev)
+            tryRemove(curNext)
+
+            return removed
+        }
+
+        private fun tryRemove(cur:  Node<E>) {
+            if (cur.extractedOrRemoved) {
+                cur.remove()
+            }
         }
     }
 }
